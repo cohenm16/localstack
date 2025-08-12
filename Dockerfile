@@ -4,15 +4,18 @@
 FROM python:3.11.13-slim-bookworm@sha256:139020233cc412efe4c8135b0efe1c7569dc8b28ddd88bddb109b764f8977e30 AS base
 ARG TARGETARCH
 
+COPY . /opt/code/localstack
+
 # Install runtime OS package dependencies
 RUN --mount=type=cache,target=/var/cache/apt \
-    apt-get update && \
-        # Install dependencies to add additional repos
-        apt-get install -y --no-install-recommends \
-            # Runtime packages (groff-base is necessary for AWS CLI help)
-            ca-certificates curl gnupg git make openssl tar pixz zip unzip groff-base iputils-ping nss-passwords procps iproute2 xz-utils libatomic1 binutils && \
-        # patch for CVE-2024-45490, CVE-2024-45491, CVE-2024-45492
-        apt-get install --only-upgrade libexpat1
+    DEBIAN_FRONTEND=noninteractive apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg git make openssl tar pixz zip unzip \
+        groff-base iputils-ping nss-passwords procps iproute2 xz-utils \
+        libatomic1 binutils && \
+    apt-get install --only-upgrade -y libexpat1 || (cat /etc/apt/sources.list && exit 1)
+
 
 # FIXME Node 18 actually shouldn't be necessary in Community, but we assume its presence in lots of tests
 # Install nodejs package from the dist release server. Note: we're installing from dist binaries, and not via
@@ -61,7 +64,7 @@ ENV LANG=C.UTF-8
 
 # set workdir
 RUN mkdir -p /opt/code/localstack
-RUN mkdir /opt/code/localstack/localstack-core
+RUN mkdir -p /opt/code/localstack/localstack-core
 WORKDIR /opt/code/localstack/
 
 # create localstack user and filesystem hierarchy, perform some permission fixes
@@ -116,6 +119,8 @@ ADD Makefile pyproject.toml requirements-runtime.txt ./
 # add the localstack start scripts (necessary for the installation of the runtime dependencies, i.e. `pip install -e .`)
 ADD bin/localstack bin/localstack.bat bin/localstack-supervisor bin/
 
+RUN find /opt/code/localstack -type f \( -name "*.sh" -o -name "*.py" -o -path "*/bin/*" \) -exec sed -i 's/\r$//' {} +
+
 # Install dependencies for running the LocalStack runtime
 RUN --mount=type=cache,target=/root/.cache\
     . .venv/bin/activate && pip3 install -r requirements-runtime.txt
@@ -126,6 +131,7 @@ RUN --mount=type=cache,target=/root/.cache\
 #
 FROM base
 COPY --from=builder /opt/code/localstack/.venv /opt/code/localstack/.venv
+
 # The build version is set in the docker-helper.sh script to be the output of setuptools_scm
 ARG LOCALSTACK_BUILD_VERSION
 
@@ -134,8 +140,11 @@ ADD Makefile pyproject.toml ./
 # add the localstack start scripts (necessary for the installation of the runtime dependencies, i.e. `pip install -e .`)
 ADD bin/localstack bin/localstack.bat bin/localstack-supervisor bin/
 
+
 # add the code as late as possible
 ADD localstack-core/ /opt/code/localstack/localstack-core
+
+
 
 # Install LocalStack Community and generate the version file while doing so
 RUN --mount=type=cache,target=/root/.cache \
